@@ -4,8 +4,11 @@ use std::os::raw::{c_char, c_int, c_long, c_uint, c_void};
 use std::slice;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(feature = "hexfellow")]
 use tokio::net::UdpSocket;
+#[cfg(feature = "hexfellow")]
 use tokio::sync::mpsc;
+
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 struct KcpUserData {
@@ -31,12 +34,15 @@ unsafe extern "C" fn udp_output(
     len
 }
 
+#[cfg(feature = "hexfellow")]
 struct Kcp {
     kcp: *mut IKCPCB,
 }
 
+#[cfg(feature = "hexfellow")]
 unsafe impl Send for Kcp {}
 
+#[cfg(feature = "hexfellow")]
 impl Kcp {
     fn new(
         conv: u32,
@@ -60,6 +66,7 @@ impl Kcp {
     }
 }
 
+#[cfg(feature = "hexfellow")]
 impl Drop for Kcp {
     fn drop(&mut self) {
         unsafe { ikcp_release(self.kcp) };
@@ -72,6 +79,7 @@ impl Drop for Kcp {
 // TODO: Improve this
 // When this struct is dropped, the underlying kcp objects will be dropped.
 // TODO impl drop for this struct, make sure to stop spawned tasks, drop underlaying kcp objects.
+#[cfg(feature = "hexfellow")]
 pub struct KcpPortOwner {
     // A Map to remember the peer for each conv id. For multi connection support.
     // Used when sending data, and when receiving data, we can look up the peer from the map to double check validity.
@@ -80,20 +88,22 @@ pub struct KcpPortOwner {
     j: tokio::task::JoinHandle<()>,
 }
 
+#[cfg(feature = "hexfellow")]
 impl Drop for KcpPortOwner {
     fn drop(&mut self) {
         self.j.abort();
     }
 }
 
+#[cfg(feature = "hexfellow")]
 impl KcpPortOwner {
     pub async fn new(
         bind: SocketAddr,
         conv: u32,
         peer: SocketAddr,
     ) -> Result<(Self, mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>), anyhow::Error> {
-        let socket = UdpSocket::bind(bind).await?;
-        let socket = Arc::new(socket);
+        let socket: UdpSocket = UdpSocket::bind(bind).await?;
+        let socket: Arc<UdpSocket> = Arc::new(socket);
         // From app layer. App uses tx to send data to KCP layer.
         let (app_send_tx, mut app_send_rx) = mpsc::channel::<Vec<u8>>(100);
         // Data from KCP layer to app layer.
@@ -137,6 +147,7 @@ impl KcpPortOwner {
     }
 }
 
+#[cfg(feature = "hexfellow")]
 async fn send_data(
     kcp: &Mutex<Kcp>,
     data: Vec<u8>,
@@ -164,6 +175,7 @@ async fn send_data(
     }
 }
 
+#[cfg(feature = "hexfellow")]
 async fn socket_rx(
     kcp: &Mutex<Kcp>,
     dq: &Arc<Mutex<std::collections::VecDeque<(Vec<u8>, SocketAddr)>>>,
