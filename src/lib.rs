@@ -1,9 +1,6 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::io;
+use log::debug;
 use std::net::SocketAddr;
 use std::os::raw::{c_char, c_int, c_long, c_uint, c_void};
-use std::rc::Rc;
 use std::slice;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -30,11 +27,7 @@ unsafe extern "C" fn udp_output(
     let ctx = &*(user as *const KcpUserData);
 
     let data = slice::from_raw_parts(buf as *const u8, len as usize).to_vec();
-    // Put data into deque
-    // println!("UDP output: {:?}", data);
     ctx.tx.lock().unwrap().push_back((data, ctx.peer));
-    // println!("Pushed data to deque");
-    // println!("Deque size: {}", ctx.tx.borrow().len());
     len
 }
 
@@ -70,6 +63,7 @@ impl Kcp {
 impl Drop for Kcp {
     fn drop(&mut self) {
         unsafe { ikcp_release(self.kcp) };
+        debug!("Kcp dropped");
     }
 }
 
@@ -86,17 +80,13 @@ pub struct KcpPortOwner {
     j: tokio::task::JoinHandle<()>,
 }
 
-impl KcpPortOwner {
-    // async fn new(bind: SocketAddr) -> Result<Self, io::Error> {
-    //     let socket = UdpSocket::bind(bind).await?;
-    //     let socket = Arc::new(socket);
-    //     Ok(Self {
-    //         // map: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-    //         socket,
-    //     })
-    // }
+impl Drop for KcpPortOwner {
+    fn drop(&mut self) {
+        self.j.abort();
+    }
+}
 
-    // async fn new_connection(&mut self, conv: u32, peer: SocketAddr) {
+impl KcpPortOwner {
     pub async fn new(
         bind: SocketAddr,
         conv: u32,
@@ -107,11 +97,13 @@ impl KcpPortOwner {
         // From app layer. App uses tx to send data to KCP layer.
         let (app_send_tx, mut app_send_rx) = mpsc::channel::<Vec<u8>>(100);
         // Data from KCP layer to app layer.
-        let (app_recv_tx, mut app_recv_rx) = mpsc::channel::<Vec<u8>>(100);
+        let (app_recv_tx, app_recv_rx) = mpsc::channel::<Vec<u8>>(100);
 
         let skt = socket.clone();
+        let (kcp, dq) = Kcp::new(conv, peer).ok_or(anyhow::anyhow!(
+            "Failed to create KCP from underlying C library"
+        ))?;
         let j = tokio::spawn(async move {
-            let (kcp, dq) = Kcp::new(conv, peer).expect("Failed to create KCP");
             let kcp = Mutex::new(kcp);
             unsafe {
                 let kcp = kcp.lock().unwrap();
@@ -119,23 +111,18 @@ impl KcpPortOwner {
                 ikcp_setmtu(kcp.kcp, 1400);
                 ikcp_setoutput(kcp.kcp, Some(udp_output));
             };
-
-            // TODO Remember to check deq everytime we called ikcp_update or ikcp_input
-
             let start_time = Instant::now();
-            let kcp = kcp;
-
             loop {
                 tokio::select! {
-                    data = app_send_rx.recv() => {
-                        // println!("Sending data to KCP: {:?}", data);
-                        // TODO when app_send_tx is dropped, data will be None.
-                        // Need to handle this.
-                        send_data(&kcp, data.unwrap(), &dq, &skt, start_time).await;
-                    }
+                    data = (app_send_rx.recv()), if !app_send_rx.is_closed() => {
+                        if let Some(data) = data {
+                            send_data(&kcp, data, &dq, &skt, start_time).await;
+                        } else {
+                            debug!("App send tx dropped");
+                        }
+                    },
                     data = socket_rx(&kcp, &dq, &skt, conv, peer, start_time) => {
                         if let Ok(Some(data)) = data {
-                            // println!("Received data from socket: {:?}", data);
                             app_recv_tx.send(data).await.unwrap();
                         }
                     }
@@ -169,7 +156,6 @@ async fn send_data(
             let res = { dq.lock().unwrap().pop_front() };
             match res {
                 Some((data, addr)) => {
-                    // println!("Sending {:?} to {:?}", data, addr);
                     socket.send_to(&data, addr).await.unwrap();
                 }
                 None => break,
@@ -182,7 +168,6 @@ async fn socket_rx(
     kcp: &Mutex<Kcp>,
     dq: &Arc<Mutex<std::collections::VecDeque<(Vec<u8>, SocketAddr)>>>,
     socket: &Arc<UdpSocket>,
-    // map: &tokio::sync::Mutex<HashMap<u32, SocketAddr>>,
     conv: u32,
     peer: SocketAddr,
     start_time: Instant,
@@ -195,37 +180,18 @@ async fn socket_rx(
             // Successfully got data
             match data {
                 Ok((size, addr)) => {
-                    // println!("Received {:?} from {:?}", size, addr);
-                    // Got data from underlying socket
-                    // Call ikcp_input to handle the data
-                    // Check if package is valid, and source is registered in map
                     if size < 24 {
-                        // Ignore package
-                        println!("Ignore package from too small {:?}", addr);
+                        debug!("Ignore package from too small {:?}", addr);
                         return Ok(None);
                     }
-                    // println!("UDP buffer: {:?}", udp_buffer);
                     if conv != u32::from_le_bytes(udp_buffer[0..4].try_into().unwrap()) {
-                        println!("Ignore package from wrong conv {:?}", addr);
+                        debug!("Ignore package from wrong conv {:?}", addr);
                         return Ok(None);
                     }
                     if addr != peer {
-                        println!("Ignore package from wrong peer {:?}", addr);
+                        debug!("Ignore package from wrong peer {:?}", addr);
                         return Ok(None);
                     }
-                    // println!("Conv: {:?}", conv);
-                    // let record = map
-                    //     .borrow_mut()
-                    //     .get(&conv)
-                    //     .ok_or(anyhow::anyhow!("conv not found"))?
-                    //     .clone();
-                    // println!("Record: {:?}", record);
-                    // if addr != record {
-                    //     // Ignore package
-                    //     println!("Ignore package from {:?}", addr);
-                    //     return Ok(None);
-                    // }
-                    // println!("Handle package from {:?}", addr);
                     unsafe {
                         ikcp_input(
                             kcp.lock().unwrap().kcp,
@@ -251,7 +217,6 @@ async fn socket_rx(
             let res = { dq.lock().unwrap().pop_front() };
             match res {
                 Some((data, addr)) => {
-                    // println!("Sending {:?} to {:?}", data, addr);
                     socket.send_to(&data, addr).await.unwrap();
                 }
                 None => break,
@@ -271,7 +236,7 @@ async fn socket_rx(
         return Err(anyhow::anyhow!("ikcp_recv error: {size}"));
     }
     let data = data[0..size as usize].to_vec();
-    println!(
+    debug!(
         "Received data from KCP: {:?}",
         String::from_utf8_lossy(&data)
     );
