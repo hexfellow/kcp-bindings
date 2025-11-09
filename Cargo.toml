@@ -3,6 +3,11 @@ name = "kcp-bindings"
 version = "0.0.1"
 edition = "2021"
 build = "build.rs"
+license = "MIT OR Apache-2.0"
+keywords = ["hexfellow", "kcp"]
+description = "Bindings for the KCP library"
+repository = "https://github.com/hexfellow/kcp-bindings"
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1.41.0", features = ["full"], optional = true }
