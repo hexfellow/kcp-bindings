@@ -97,12 +97,11 @@ impl Drop for KcpPortOwner {
 
 #[cfg(feature = "hexfellow")]
 impl KcpPortOwner {
-    pub async fn new(
-        bind: SocketAddr,
+    pub async fn new_costom_socket(
+        socket: UdpSocket,
         conv: u32,
         peer: SocketAddr,
     ) -> Result<(Self, mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>), anyhow::Error> {
-        let socket: UdpSocket = UdpSocket::bind(bind).await?;
         let socket: Arc<UdpSocket> = Arc::new(socket);
         // From app layer. App uses tx to send data to KCP layer.
         let (app_send_tx, mut app_send_rx) = mpsc::channel::<Vec<u8>>(100);
@@ -140,10 +139,38 @@ impl KcpPortOwner {
             }
         });
 
-        // Connection is now ready, add it to the map.
-        // self.map.lock().await.insert(conv, peer);
-
         Ok((Self { socket, j }, app_send_tx, app_recv_rx))
+    }
+
+    pub async fn new(
+        bind: SocketAddr,
+        conv: u32,
+        peer: SocketAddr,
+    ) -> Result<(Self, mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>), anyhow::Error> {
+        let socket: UdpSocket = UdpSocket::bind(bind).await?;
+        Self::new_costom_socket(socket, conv, peer).await
+    }
+
+    pub fn get_socket_local_addr(&self) -> Result<SocketAddr, anyhow::Error> {
+        self.socket
+            .local_addr()
+            .map_err(|e| anyhow::anyhow!("Failed to get local address: {e}"))
+    }
+
+    pub async fn send_binary(
+        tx: &mpsc::Sender<Vec<u8>>,
+        data: Vec<u8>,
+    ) -> Result<(), anyhow::Error> {
+        tx.send(HexSocketParser::create_header(
+            &data,
+            HexSocketOpcode::Binary,
+        ))
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to send binary data: {e}"))?;
+        tx.send(data)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send binary data: {e}"))?;
+        Ok(())
     }
 }
 
@@ -257,7 +284,7 @@ async fn socket_rx(
 
 #[cfg(feature = "hexfellow")]
 #[derive(Debug, Eq, PartialEq)]
-enum HexSocketOpcode {
+pub enum HexSocketOpcode {
     // Continuation = 0x0,
     Text = 0x1,
     Binary = 0x2,
@@ -281,7 +308,7 @@ impl TryFrom<u8> for HexSocketOpcode {
 }
 
 #[cfg(feature = "hexfellow")]
-struct HexSocketParser {
+pub struct HexSocketParser {
     data: Vec<u8>,
 }
 
