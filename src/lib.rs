@@ -125,6 +125,7 @@ impl KcpPortOwner {
                 tokio::select! {
                     data = (app_send_rx.recv()), if !app_send_rx.is_closed() => {
                         if let Some(data) = data {
+                            debug!("Sending data to KCP: {:?}", &data);
                             send_data(&kcp, data, &dq, &skt, start_time).await;
                         } else {
                             debug!("App send tx dropped");
@@ -132,7 +133,9 @@ impl KcpPortOwner {
                     },
                     data = socket_rx(&kcp, &dq, &skt, conv, peer, start_time) => {
                         if let Ok(Some(data)) = data {
-                            app_recv_tx.send(data).await.unwrap();
+                            if app_recv_tx.send(data).await.is_err() {
+                                debug!("App recv rx dropped");
+                            }
                         }
                     }
                 }
@@ -275,10 +278,7 @@ async fn socket_rx(
         return Err(anyhow::anyhow!("ikcp_recv error: {size}"));
     }
     let data = data[0..size as usize].to_vec();
-    debug!(
-        "Received data from KCP: {:?}",
-        String::from_utf8_lossy(&data)
-    );
+    debug!("Received data from KCP: {:?}", &data);
     Ok(Some(data))
 }
 
