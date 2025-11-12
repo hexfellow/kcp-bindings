@@ -321,7 +321,7 @@ impl HexSocketParser {
     // Panics if data is more than UINT16_MAX bytes.
     pub fn create_header(data: &[u8], opcode: HexSocketOpcode) -> Vec<u8> {
         let len = data.len();
-        if len > UINT16_MAX as usize {
+        if len > std::u16::MAX as usize {
             panic!("Data is more than UINT16_MAX bytes");
         }
         let len = len as u16;
