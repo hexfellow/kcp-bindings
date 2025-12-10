@@ -1,6 +1,6 @@
 [package]
 name = "kcp-bindings"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 build = "build.rs"
 license = "MIT OR Apache-2.0"

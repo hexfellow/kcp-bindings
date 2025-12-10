@@ -230,10 +230,10 @@ async fn socket_rx(
                         debug!("Ignore package from wrong conv {:?}", addr);
                         return Ok(None);
                     }
-                    if addr != peer {
-                        debug!("Ignore package from wrong peer {:?}", addr);
-                        return Ok(None);
-                    }
+                    // if addr != peer {
+                    //     debug!("Ignore package from wrong peer {:?}", addr);
+                    //     return Ok(None);
+                    // }
                     unsafe {
                         ikcp_input(
                             kcp.lock().unwrap().kcp,
